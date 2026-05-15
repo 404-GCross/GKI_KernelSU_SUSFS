@@ -3,10 +3,14 @@
 
 # Gemini
 .gemini/
+Gemini_Generated_Image_*.png
 
 # Development files
 hympfs-dev.diff
 .gitignore
+.secrets/
+*.jks
+*.keystore
 # IDE & Editors
 .idea/
 .vscode/
@@ -42,6 +46,7 @@ Image.gz
 Image.lz4
 *.img
 *.zip
+!modules/ntsync-ipset-helper/ntsync权限修复&ipset启用.zip
 
 # Temporary files
 *.temp
@@ -68,4 +73,3 @@ web/serve.sh
 web/dist/
 wild_kernel_comparison.md
 action_build_comparison.md
-

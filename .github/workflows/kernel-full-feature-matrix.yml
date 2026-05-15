@@ -1,0 +1,454 @@
+name: 全属性内核构建矩阵
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_variant:
+        description: "KernelSU 变体"
+        required: true
+        type: choice
+        options:
+          - Official
+          - ReSukiSU
+          - SukiSU
+        default: ReSukiSU
+      kernelsu_branch:
+        description: "KSU 分支"
+        required: true
+        type: choice
+        options:
+          - Stable(标准)
+          - Dev(开发)
+          - Other(其他/指定)
+        default: Dev(开发)
+      version:
+        description: "自定义版本名 (可选)"
+        required: false
+        type: string
+        default: ""
+      revision:
+        description: "修订版本 (如 r11，仅 5.10 需要)"
+        required: false
+        type: string
+        default: "r11"
+      build_time:
+        description: "自定义构建时间 (可选，N或留空=当前UTC)"
+        required: false
+        type: string
+        default: "Sun Dec 01 08:10:00 UTC 2024"
+      kpm_password:
+        description: "自定义 KPM 超级密码（留空=使用默认密码）"
+        required: false
+        type: string
+        default: ""
+      enable_susfs:
+        description: "启用 SUSFS"
+        required: false
+        type: boolean
+        default: true
+      use_zram:
+        description: "启用 ZRAM 增强算法（6.12 会自动关闭）"
+        required: false
+        type: boolean
+        default: true
+      zram_full_algo:
+        description: "启用 ZRAM 完整算法支持（6.12 会自动关闭）"
+        required: false
+        type: boolean
+        default: true
+      zram_extra_algos:
+        description: "自定义 ZRAM 算法（逗号分隔，仅未启用完整算法时生效）"
+        required: false
+        type: string
+        default: ""
+      use_bbg:
+        description: "启用 BBG 防格机"
+        required: false
+        type: boolean
+        default: true
+      use_ddk:
+        description: "启用 DDK 防格机 LSM"
+        required: false
+        type: boolean
+        default: true
+      use_ntsync:
+        description: "启用 NTsync"
+        required: false
+        type: boolean
+        default: true
+      use_networking:
+        description: "启用网络增强（IPSet + BBR）"
+        required: false
+        type: boolean
+        default: true
+      use_kpm:
+        description: "启用 KPM 功能"
+        required: false
+        type: boolean
+        default: true
+      use_rekernel:
+        description: "启用 Re-Kernel 驱动"
+        required: false
+        type: boolean
+        default: true
+      supp_op:
+        description: "启用一加 8E 支持"
+        required: false
+        type: boolean
+        default: true
+      virtualization_support:
+        description: "虚拟化支持 (5.10~6.6: 槽位补丁, 6.12: 开/关；on 在 5.10~6.6 自动使用 678)"
+        required: false
+        type: choice
+        options:
+          - "off"
+          - "on"
+          - "678"
+          - "123"
+          - "345"
+        default: "off"
+      use_custom_external_modules:
+        description: "启用自定义外部模块注入"
+        required: false
+        type: boolean
+        default: false
+      custom_external_modules:
+        description: "自定义外部模块（repo;stage|repo;stage，stage=after_patch/before_build）"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  prepare-matrix:
+    name: 准备内核小版本矩阵
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.kernel-matrix.outputs.matrix }}
+      count: ${{ steps.kernel-matrix.outputs.count }}
+    steps:
+      - name: 检出代码仓库
+        uses: actions/checkout@v6
+
+      - name: 生成矩阵
+        id: kernel-matrix
+        shell: bash
+        env:
+          MATRIX_KSU_VARIANT: ${{ inputs.kernelsu_variant }}
+          MATRIX_KSU_BRANCH: ${{ inputs.kernelsu_branch }}
+          MATRIX_REVISION: ${{ inputs.revision || '' }}
+          MATRIX_BUILD_TIME: ${{ inputs.build_time || '' }}
+          MATRIX_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
+          MATRIX_USE_ZRAM: ${{ inputs.use_zram }}
+          MATRIX_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
+          MATRIX_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos || '' }}
+          MATRIX_USE_BBG: ${{ inputs.use_bbg }}
+          MATRIX_USE_DDK: ${{ inputs.use_ddk }}
+          MATRIX_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
+          MATRIX_USE_NTSYNC: ${{ inputs.use_ntsync }}
+          MATRIX_USE_NETWORKING: ${{ inputs.use_networking }}
+          MATRIX_USE_KPM: ${{ inputs.use_kpm }}
+          MATRIX_KPM_PASSWORD: ${{ inputs.kpm_password || '' }}
+          MATRIX_USE_REKERNEL: ${{ inputs.use_rekernel }}
+          MATRIX_SUPP_OP: ${{ inputs.supp_op }}
+          MATRIX_USE_CUSTOM_EXTERNAL_MODULES: ${{ inputs.use_custom_external_modules }}
+          MATRIX_CUSTOM_EXTERNAL_MODULES: ${{ inputs.custom_external_modules || '' }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          build_yml = Path(".github/workflows/build.yml").read_text(encoding="utf-8")
+          match = re.search(
+              r"KNOWN_KERNEL_PAIRS=\$\(cat <<'EOF'\n(.*?)\n\s*EOF\n\s*\)",
+              build_yml,
+              re.S,
+          )
+          if not match:
+              raise SystemExit("KNOWN_KERNEL_PAIRS block not found in build.yml")
+
+          latest = {}
+          for raw_line in match.group(1).splitlines():
+              line = raw_line.strip()
+              if not line:
+                  continue
+              parts = line.split()
+              if len(parts) != 4:
+                  continue
+
+              android_version, kernel_version, sub_level, os_patch_level = parts
+              if sub_level == "X" or os_patch_level == "lts":
+                  continue
+
+              row = {
+                  "android_version": android_version,
+                  "kernel_version": kernel_version,
+                  "sub_level": sub_level,
+                  "os_patch_level": os_patch_level,
+              }
+              key = (android_version, kernel_version, sub_level)
+              if key not in latest or os_patch_level > latest[key]["os_patch_level"]:
+                  latest[key] = row
+
+          android_order = {
+              "android12": 12,
+              "android13": 13,
+              "android14": 14,
+              "android15": 15,
+              "android16": 16,
+          }
+
+          def version_key(value):
+              return tuple(int(part) for part in value.split("."))
+
+          def sort_key(row):
+              return (
+                  android_order.get(row["android_version"], 999),
+                  version_key(row["kernel_version"]),
+                  int(row["sub_level"]),
+              )
+
+          matrix = sorted(latest.values(), key=sort_key)
+          matrix_json = json.dumps({"include": matrix}, separators=(",", ":"))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={matrix_json}\n")
+              output.write(f"count={len(matrix)}\n")
+
+          counts = Counter(f'{row["android_version"]}-{row["kernel_version"]}' for row in matrix)
+
+          def env_value(name, fallback="无"):
+              value = os.environ.get(name, "")
+              return value if value else fallback
+
+          def env_enabled(name):
+              return "on" if os.environ.get(name, "").lower() == "true" else "off"
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## 全属性内核构建矩阵\n\n")
+              summary.write(f"- 总任务数: {len(matrix)}\n")
+              summary.write(f"- KernelSU 变体: {env_value('MATRIX_KSU_VARIANT')}\n")
+              summary.write(f"- KSU 分支: {env_value('MATRIX_KSU_BRANCH')}\n")
+              summary.write(f"- 修订版本: {env_value('MATRIX_REVISION')}\n")
+              summary.write(f"- 构建时间: {env_value('MATRIX_BUILD_TIME', '当前 UTC')}\n")
+              summary.write(f"- SUSFS: {env_enabled('MATRIX_ENABLE_SUSFS')}\n")
+              summary.write(f"- ZRAM: {env_enabled('MATRIX_USE_ZRAM')}（6.12 自动 off）\n")
+              summary.write(f"- ZRAM 完整算法: {env_enabled('MATRIX_ZRAM_FULL_ALGO')}（6.12 自动 off）\n")
+              summary.write(f"- ZRAM 额外算法: {env_value('MATRIX_ZRAM_EXTRA_ALGOS')}\n")
+              summary.write(f"- BBG: {env_enabled('MATRIX_USE_BBG')}\n")
+              summary.write(f"- DDK LSM: {env_enabled('MATRIX_USE_DDK')}\n")
+              summary.write(f"- 虚拟化支持: {env_value('MATRIX_VIRTUALIZATION_SUPPORT', 'off')}\n")
+              summary.write(f"- NTsync: {env_enabled('MATRIX_USE_NTSYNC')}\n")
+              summary.write(f"- Networking: {env_enabled('MATRIX_USE_NETWORKING')}\n")
+              summary.write(f"- KPM: {env_enabled('MATRIX_USE_KPM')}\n")
+              summary.write(f"- KPM 密码: {'已自定义' if os.environ.get('MATRIX_KPM_PASSWORD', '') else '默认'}\n")
+              summary.write(f"- Re-Kernel: {env_enabled('MATRIX_USE_REKERNEL')}\n")
+              summary.write(f"- 一加 8E: {env_enabled('MATRIX_SUPP_OP')}\n")
+              summary.write(f"- 自定义外部模块: {env_enabled('MATRIX_USE_CUSTOM_EXTERNAL_MODULES')}\n")
+              summary.write(f"- 自定义外部模块参数: {env_value('MATRIX_CUSTOM_EXTERNAL_MODULES')}\n")
+              summary.write("- Android16/6.12: ZRAM off\n")
+              summary.write("- LTS: 已排除\n\n")
+              for combo in sorted(counts):
+                  summary.write(f"- {combo}: {counts[combo]}\n")
+
+          print(matrix_json)
+          PY
+
+  build-full-feature-matrix:
+    name: "${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.android_version }}-${{ matrix.os_patch_level }}"
+    needs: prepare-matrix
+    if: ${{ needs.prepare-matrix.outputs.count != '0' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 83
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      android_version: ${{ matrix.android_version }}
+      kernel_version: ${{ matrix.kernel_version }}
+      sub_level: ${{ matrix.sub_level }}
+      os_patch_level: ${{ matrix.os_patch_level }}
+      ksu_variant: ${{ inputs.kernelsu_variant }}
+      ksu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ inputs.version || '' }}
+      revision: ${{ inputs.revision || '' }}
+      build_time: ${{ inputs.build_time || '' }}
+      use_zram: ${{ inputs.use_zram && matrix.kernel_version != '6.12' }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_ddk: ${{ inputs.use_ddk }}
+      use_ntsync: ${{ inputs.use_ntsync }}
+      use_networking: ${{ inputs.use_networking }}
+      use_kpm: ${{ inputs.use_kpm }}
+      use_rekernel: ${{ inputs.use_rekernel }}
+      enable_susfs: ${{ inputs.enable_susfs }}
+      supp_op: ${{ inputs.supp_op }}
+      virtualization_support: ${{ inputs.virtualization_support == 'off' && 'off' || (matrix.kernel_version == '6.12' && 'on' || (inputs.virtualization_support == 'on' && '678' || inputs.virtualization_support)) }}
+      zram_full_algo: ${{ inputs.zram_full_algo && matrix.kernel_version != '6.12' }}
+      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      kpm_password: ${{ inputs.kpm_password || '' }}
+      use_custom_external_modules: ${{ inputs.use_custom_external_modules }}
+      custom_external_modules: ${{ inputs.custom_external_modules || '' }}
+
+  trigger-full-feature-release:
+    name: 触发全属性矩阵 Release 补发
+    needs:
+      - prepare-matrix
+      - build-full-feature-matrix
+    if: ${{ needs.prepare-matrix.outputs.count != '0' && needs.build-full-feature-matrix.result == 'success' && github.repository == 'xingguangcuican6666/ABK' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      KSU_VARIANT: ${{ inputs.kernelsu_variant }}
+      KSU_BRANCH: ${{ inputs.kernelsu_branch }}
+      VERSION: ${{ inputs.version || '' }}
+      REVISION: ${{ inputs.revision || '' }}
+      BUILD_TIME: ${{ inputs.build_time || '当前 UTC' }}
+      ENABLE_SUSFS: ${{ inputs.enable_susfs }}
+      USE_ZRAM: ${{ inputs.use_zram }}
+      ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
+      ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos || '' }}
+      USE_BBG: ${{ inputs.use_bbg }}
+      USE_DDK: ${{ inputs.use_ddk }}
+      KPM_PASSWORD: ${{ inputs.kpm_password || '' }}
+      USE_KPM: ${{ inputs.use_kpm }}
+      USE_REKERNEL: ${{ inputs.use_rekernel }}
+      SUPP_OP: ${{ inputs.supp_op }}
+      USE_CUSTOM_EXTERNAL_MODULES: ${{ inputs.use_custom_external_modules }}
+      CUSTOM_EXTERNAL_MODULES: ${{ inputs.custom_external_modules || '' }}
+      USE_NTSYNC: ${{ inputs.use_ntsync }}
+      USE_NETWORKING: ${{ inputs.use_networking }}
+      VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
+    steps:
+      - name: 触发补发 Release 工作流
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "$KPM_PASSWORD" ]; then
+            kpm_password_label="已自定义"
+          else
+            kpm_password_label="默认"
+          fi
+
+          if [ -n "$VERSION" ]; then
+            version_label="$VERSION"
+          else
+            version_label="无"
+          fi
+
+          if [ -n "$REVISION" ]; then
+            revision_label="$REVISION"
+          else
+            revision_label="无"
+          fi
+
+          if [ -n "$ZRAM_EXTRA_ALGOS" ]; then
+            zram_extra_algos_label="$ZRAM_EXTRA_ALGOS"
+          else
+            zram_extra_algos_label="无"
+          fi
+
+          if [ -n "$CUSTOM_EXTERNAL_MODULES" ]; then
+            custom_modules_label="$CUSTOM_EXTERNAL_MODULES"
+          else
+            custom_modules_label="无"
+          fi
+
+          if [ "$VIRTUALIZATION_SUPPORT" = "off" ]; then
+            virtualization_support_label="off"
+          else
+            virtualization_support_label="${VIRTUALIZATION_SUPPORT}（6.12 自动使用 on）"
+          fi
+
+          release_metadata="$(
+            jq -cn \
+              --arg ksu_variant "$KSU_VARIANT" \
+              --arg ksu_branch "$KSU_BRANCH" \
+              --arg version "$version_label" \
+              --arg revision "$revision_label" \
+              --arg build_time "$BUILD_TIME" \
+              --arg susfs_enabled "$ENABLE_SUSFS" \
+              --arg use_zram "$USE_ZRAM" \
+              --arg zram_full_algo "$ZRAM_FULL_ALGO" \
+              --arg zram_extra_algos "$zram_extra_algos_label" \
+              --arg use_bbg "$USE_BBG" \
+              --arg use_ddk "$USE_DDK" \
+              --arg use_kpm "$USE_KPM" \
+              --arg kpm_password "$kpm_password_label" \
+              --arg use_rekernel "$USE_REKERNEL" \
+              --arg supp_op "$SUPP_OP" \
+              --arg use_custom_external_modules "$USE_CUSTOM_EXTERNAL_MODULES" \
+              --arg custom_external_modules "$custom_modules_label" \
+              --arg use_ntsync "$USE_NTSYNC" \
+              --arg use_networking "$USE_NETWORKING" \
+              --arg virtualization_support "$virtualization_support_label" \
+              '{
+                ksu_variant: $ksu_variant,
+                ksu_branch: $ksu_branch,
+                version: $version,
+                revision: $revision,
+                build_time: $build_time,
+                susfs_enabled: $susfs_enabled,
+                use_zram: $use_zram,
+                zram_full_algo: $zram_full_algo,
+                zram_extra_algos: $zram_extra_algos,
+                use_bbg: $use_bbg,
+                use_ddk: $use_ddk,
+                use_kpm: $use_kpm,
+                kpm_password: $kpm_password,
+                use_rekernel: $use_rekernel,
+                supp_op: $supp_op,
+                use_custom_external_modules: $use_custom_external_modules,
+                custom_external_modules: $custom_external_modules,
+                use_ntsync: $use_ntsync,
+                use_networking: $use_networking,
+                virtualization_support: $virtualization_support
+              }'
+          )"
+          release_metadata_base64="$(printf '%s' "$release_metadata" | base64 -w0)"
+
+          release_title="AnyBase Kernel 全属性矩阵 ${KSU_VARIANT} #${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+
+          gh workflow run release-existing-full-feature-run.yml \
+            --repo "$REPO" \
+            --ref "$GITHUB_REF_NAME" \
+            -f source_run_id="$GITHUB_RUN_ID" \
+            -f source_attempt="$GITHUB_RUN_ATTEMPT" \
+            -f kernelsu_variant="$KSU_VARIANT" \
+            -f release_title="$release_title" \
+            -f release_metadata_base64="$release_metadata_base64"
+
+          {
+            echo "## 已触发补发 Release 工作流"
+            echo
+            echo "- 源 run: https://github.com/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- 补发工作流: release-existing-full-feature-run.yml"
+            echo "- Release 标题: ${release_title}"
+            echo "- 虚拟化支持: ${VIRTUALIZATION_SUPPORT}"
+            echo "- SUSFS: ${ENABLE_SUSFS}"
+            echo "- ZRAM: ${USE_ZRAM}（6.12 自动 off）"
+            echo "- BBG: ${USE_BBG}"
+            echo "- DDK LSM: ${USE_DDK}"
+            echo "- NTsync: ${USE_NTSYNC}"
+            echo "- Networking: ${USE_NETWORKING}"
+            echo "- KPM: ${USE_KPM}"
+            echo "- Re-Kernel: ${USE_REKERNEL}"
+            echo "- 一加 8E: ${SUPP_OP}"
+            echo "- 自定义注入: ${USE_CUSTOM_EXTERNAL_MODULES}"
+            echo "- 自定义注入参数列表: ${custom_modules_label}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "已触发补发 Release 工作流: ${release_title}"

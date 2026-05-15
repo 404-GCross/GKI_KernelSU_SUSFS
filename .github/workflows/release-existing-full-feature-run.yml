@@ -1,0 +1,263 @@
+name: 补发全属性矩阵 Release
+
+permissions:
+  contents: write
+  actions: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "已完成全属性矩阵 run id"
+        required: true
+        type: string
+      source_attempt:
+        description: "源 run attempt"
+        required: false
+        type: string
+        default: "1"
+      kernelsu_variant:
+        description: "KernelSU 变体"
+        required: false
+        type: string
+        default: "ReSukiSU"
+      release_title:
+        description: "Release 标题（留空自动生成）"
+        required: false
+        type: string
+        default: ""
+      release_metadata_json:
+        description: "Release 配置元数据 JSON（由全量矩阵工作流自动传入）"
+        required: false
+        type: string
+        default: "{}"
+      release_metadata_base64:
+        description: "Release 配置元数据 JSON 的 base64 编码（由全量矩阵工作流自动传入，优先于 release_metadata_json）"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  release-existing-run:
+    name: 从现有 artifacts 补发 Release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_ATTEMPT: ${{ inputs.source_attempt || '1' }}
+      INPUT_RELEASE_TITLE: ${{ inputs.release_title || '' }}
+      RELEASE_METADATA_JSON: ${{ inputs.release_metadata_json || '{}' }}
+      RELEASE_METADATA_BASE64: ${{ inputs.release_metadata_base64 || '' }}
+    steps:
+      - name: 检出代码仓库
+        uses: actions/checkout@v6
+
+      - name: 检查源 run 与 artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_json="$(gh api "repos/$REPO/actions/runs/$SOURCE_RUN_ID")"
+          conclusion="$(jq -r '.conclusion // empty' <<< "$run_json")"
+          head_sha="$(jq -r '.head_sha // empty' <<< "$run_json")"
+
+          if [ "$conclusion" != "failure" ] && [ "$conclusion" != "success" ]; then
+            echo "::error::源 run 尚未完成: conclusion=$conclusion"
+            exit 1
+          fi
+
+          gh api "repos/$REPO/actions/runs/$SOURCE_RUN_ID/artifacts" --paginate \
+            --jq '.artifacts[] | select(.expired == false and (.name | endswith("-Rejects") | not)) | .name' \
+            | sort > artifact_names.raw.txt
+
+          sort -u artifact_names.raw.txt > artifact_names.txt
+          skipped_duplicate_count="$(comm -23 artifact_names.raw.txt artifact_names.txt | wc -l | tr -d '[:space:]')"
+          if [ "$skipped_duplicate_count" -gt 0 ]; then
+            echo "跳过 $skipped_duplicate_count 个重复 artifact 名称，公共辅助模块只下载一次。"
+          fi
+
+          artifact_count="$(wc -l < artifact_names.txt | tr -d '[:space:]')"
+          if [ "$artifact_count" -eq 0 ]; then
+            echo "::error::源 run 没有可补发的非 Rejects artifacts"
+            exit 1
+          fi
+
+          {
+            echo "SOURCE_HEAD_SHA=$head_sha"
+            echo "ARTIFACT_COUNT=$artifact_count"
+          } >> "$GITHUB_ENV"
+
+      - name: 下载源 run 产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded-artifacts
+
+          while IFS= read -r artifact; do
+            [ -n "$artifact" ] || continue
+            echo "下载 artifact: $artifact"
+            gh run download "$SOURCE_RUN_ID" \
+              --repo "$REPO" \
+              --name "$artifact" \
+              --dir downloaded-artifacts
+          done < artifact_names.txt
+
+      - name: 准备 Release 元数据
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${RELEASE_METADATA_BASE64:-}" ]; then
+            if metadata="$(printf '%s' "$RELEASE_METADATA_BASE64" | base64 -d 2>/dev/null)"; then
+              :
+            else
+              echo "::warning::release_metadata_base64 无法解码，回退到 release_metadata_json。"
+              metadata="${RELEASE_METADATA_JSON:-{}}"
+            fi
+          else
+            metadata="${RELEASE_METADATA_JSON:-{}}"
+          fi
+
+          if ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$metadata"; then
+            echo "::warning::release metadata 不是合法 JSON object，使用默认元数据。"
+            metadata="{}"
+          fi
+
+          metadata_value() {
+            local key="$1"
+            local fallback="$2"
+            local value
+            value="$(jq -r --arg key "$key" '.[$key] // ""' <<< "$metadata")"
+            if [ -n "$value" ]; then
+              printf '%s' "$value"
+            else
+              printf '%s' "$fallback"
+            fi
+          }
+
+          ksu_variant="$(metadata_value ksu_variant "${{ inputs.kernelsu_variant }}")"
+          ksu_branch="$(metadata_value ksu_branch "Stable(标准)")"
+          version="$(metadata_value version "无")"
+          revision="$(metadata_value revision "无")"
+          build_time="$(metadata_value build_time "Sun Dec 01 08:10:00 UTC 2024")"
+          susfs_enabled="$(metadata_value susfs_enabled "true")"
+          use_zram="$(metadata_value use_zram "true")"
+          zram_full_algo="$(metadata_value zram_full_algo "true")"
+          zram_extra_algos="$(metadata_value zram_extra_algos "无")"
+          use_bbg="$(metadata_value use_bbg "true")"
+          use_ddk="$(metadata_value use_ddk "true")"
+          use_kpm="$(metadata_value use_kpm "true")"
+          kpm_password="$(metadata_value kpm_password "默认")"
+          use_rekernel="$(metadata_value use_rekernel "true")"
+          supp_op="$(metadata_value supp_op "true")"
+          use_custom_external_modules="$(metadata_value use_custom_external_modules "false")"
+          custom_external_modules="$(metadata_value custom_external_modules "无")"
+          use_ntsync="$(metadata_value use_ntsync "true")"
+          use_networking="$(metadata_value use_networking "true")"
+          virtualization_support="$(metadata_value virtualization_support "off")"
+
+          release_tag="full-feature-${SOURCE_RUN_ID}-a${SOURCE_ATTEMPT}"
+          if [ -n "$INPUT_RELEASE_TITLE" ]; then
+            release_title="$INPUT_RELEASE_TITLE"
+          else
+            release_title="AnyBase Kernel 全属性矩阵 ${ksu_variant} #${SOURCE_RUN_ID}.${SOURCE_ATTEMPT}"
+          fi
+
+          find ./downloaded-artifacts -type f \
+            \( -name '*AnyKernel3.zip' -o -name '*.img' \) \
+            ! -path '*-Rejects/*' \
+            | sort > release_assets.txt
+
+          asset_count="$(wc -l < release_assets.txt | tr -d '[:space:]')"
+          if [ "$asset_count" -eq 0 ]; then
+            echo "::error::下载后未找到可发布的内核产物"
+            exit 1
+          fi
+
+          cat > release_body.md << EOF
+          ## AnyBase Kernel 全属性矩阵构建
+
+          本 Release 由现有 workflow run artifacts 补发，未重新编译。
+
+          | 项目 | 内容 |
+          |:---|:---|
+          | 源 run | https://github.com/$REPO/actions/runs/$SOURCE_RUN_ID |
+          | 源 commit | $SOURCE_HEAD_SHA |
+          | Artifact 数 | $ARTIFACT_COUNT |
+          | Release asset 数 | $asset_count |
+          | KSU 变体 | $ksu_variant |
+          | KSU 分支 | $ksu_branch |
+          | 自定义版本名 | $version |
+          | 5.10 修订版本 | $revision |
+          | 构建时间 | $build_time |
+          | SUSFS 状态 | $susfs_enabled |
+          | ZRAM 增强 | $use_zram |
+          | ZRAM 完整算法 | $zram_full_algo |
+          | ZRAM 额外算法 | $zram_extra_algos |
+          | BBG 补丁 | $use_bbg |
+          | DDK LSM | $use_ddk |
+          | NTsync 补丁 | $use_ntsync |
+          | 网络增强 (IPSet + BBR) | $use_networking |
+          | KPM 功能 | $use_kpm |
+          | KPM 密码 | $kpm_password |
+          | Re-Kernel | $use_rekernel |
+          | 虚拟化支持 | $virtualization_support |
+          | 一加 8E 支持 | $supp_op |
+          | 自定义注入 | $use_custom_external_modules |
+          | 自定义注入参数列表 | $custom_external_modules |
+
+          > Android 16 / 6.12 构建会自动关闭 ZRAM 增强与 ZRAM 完整算法；虚拟化支持在 6.12 上使用开关模式。
+
+          ### 下载说明
+
+          Assets 中包含每个内核小版本对应的 AnyKernel3 刷入包和 boot 镜像。
+
+          > 刷写内核有变砖风险。刷入前请备份原厂 boot / vendor_boot 等镜像，并确认设备、Android 版本、内核版本和补丁级别匹配。
+          EOF
+
+          {
+            echo "RELEASE_TAG=$release_tag"
+            echo "RELEASE_TITLE=$release_title"
+            echo "ASSET_COUNT=$asset_count"
+          } >> "$GITHUB_ENV"
+
+      - name: 创建或更新 GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$REPO" \
+              --target "$SOURCE_HEAD_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_body.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$REPO" \
+              --target "$SOURCE_HEAD_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_body.md
+          fi
+
+      - name: 上传 Release 产物
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            echo "上传 $file"
+            gh release upload "$RELEASE_TAG" "$file" --repo "$REPO" --clobber
+          done < release_assets.txt
+
+      - name: 发布摘要
+        shell: bash
+        run: |
+          {
+            echo "## 全属性矩阵 Release 已补发"
+            echo "- Release: https://github.com/$REPO/releases/tag/$RELEASE_TAG"
+            echo "- 源 run: https://github.com/$REPO/actions/runs/$SOURCE_RUN_ID"
+            echo "- 产物数量: $ASSET_COUNT"
+          } >> "$GITHUB_STEP_SUMMARY"
