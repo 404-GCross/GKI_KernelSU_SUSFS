@@ -866,50 +866,24 @@ jobs:
           case "$KERNEL_VER" in
             6.12)
               PATCH_FILE="$DROIDSPACES_PATCHES/kernel-6.12/001.GKI-6.12-or-above-fix_sysvipc_kabi.patch"
-              if [ ! -f "$PATCH_FILE" ]; then
-                echo "::error::Droidspaces SYSVIPC kABI 补丁不存在: $PATCH_FILE"
-                exit 1
-              fi
-              # -F 5 允许最多 5 行上下文偏差，兼容 LTS 内核小幅漂移
-              if ! patch -p1 -F 5 --forward < "$PATCH_FILE"; then
-                echo "::error::SYSVIPC kABI 补丁应用失败，6.12 内核 sub_level=${{ inputs.sub_level }}"
-                exit 1
-              fi
               ;;
             5.10|5.15|6.1|6.6)
-              # 先试所选槽位，失败则回退到其他已知槽位
-              KABI_BASE="$DROIDSPACES_PATCHES/below-kernel-6.12"
-              KNOWN_SLOTS="6_7_8 1_2_3 3_4_5"
-              PATCH_APPLIED=false
-              TRY_PATCH="${KABI_BASE}/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
-              if [ -f "$TRY_PATCH" ] && patch -p1 -F 5 --forward < "$TRY_PATCH" 2>/dev/null; then
-                echo "Droidspaces SYSVIPC kABI 补丁已通过所选槽位 $SLOT_NAME 成功应用"
-                PATCH_APPLIED=true
-              else
-                echo "所选槽位 $SLOT_NAME 未命中，回退尝试其他槽位..."
-                for TRY_SLOT in $KNOWN_SLOTS; do
-                  [ "$TRY_SLOT" = "$SLOT_NAME" ] && continue
-                  TRY_PATCH="${KABI_BASE}/001.GKI-below-6.12-fix_sysvipc_kabi_${TRY_SLOT}.patch"
-                  [ -f "$TRY_PATCH" ] || continue
-                  echo "  尝试槽位 $TRY_SLOT ..."
-                  if patch -p1 -F 5 --forward < "$TRY_PATCH" 2>/dev/null; then
-                    echo "Droidspaces SYSVIPC kABI 补丁已通过槽位 $TRY_SLOT 成功应用"
-                    PATCH_APPLIED=true
-                    break
-                  fi
-                done
-              fi
-              if [ "$PATCH_APPLIED" = false ]; then
-                echo "::error::Droidspaces SYSVIPC kABI 补丁应用失败，所有槽位均不匹配"
-                echo "内核版本: $KERNEL_VER, sub_level=${{ inputs.sub_level }}"
-                exit 1
-              fi
+              PATCH_FILE="$DROIDSPACES_PATCHES/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
               ;;
             *)
               echo "::warning::Droidspaces: 未适配的内核版本 $KERNEL_VER，跳过补丁"
               exit 0
               ;;
           esac
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::Droidspaces SYSVIPC kABI 补丁不存在: $PATCH_FILE"
+            echo "请确认 Droidspaces 槽位 '$SLOT' 在此内核版本下受支持"
+            exit 1
+          fi
+          if ! patch -p1 --forward < "$PATCH_FILE"; then
+            echo "::error::SYSVIPC kABI 补丁应用失败，内核版本 $KERNEL_VER (sub_level=${{ inputs.sub_level }}) 可能尚未适配"
+            exit 1
+          fi
 
           # 5.10 及以下还需要 POSIX_MQUEUE 的 kABI 修复
           if [ "$KERNEL_VER" = "5.10" ]; then
