@@ -956,7 +956,7 @@ jobs:
 
           if [[ "${{ inputs.android_version }}" == "android15" && "${{ inputs.kernel_version }}" == "6.6" ]]; then
             # 1. 开启用户命名空间（必须）
-            # enable_config_if_defined CONFIG_USER_NS
+            enable_config_if_defined CONFIG_USER_NS
             # 2. 关闭安卓严格网络控制（必须）
             disable_config CONFIG_ANDROID_PARANOID_NETWORK
           fi
