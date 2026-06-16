@@ -18,6 +18,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - ReSukiSU
+          - NoRoot
         default: ReSukiSU
       version:
         description: "自定义版本名 (可选)"
@@ -55,11 +56,6 @@ on:
         default: "仅上传 AnyKernel3.zip"
       droidspaces_ntsync:
         description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
-        required: false
-        type: boolean
-        default: false
-      noroot:
-        description: "无 Root 模式 (不集成 KernelSU)"
         required: false
         type: boolean
         default: false
@@ -131,10 +127,6 @@ on:
         required: false
         type: boolean
         default: false
-      noroot:
-        required: false
-        type: boolean
-        default: false
       called_from_main:
         description: "是否从 main.yml 调用（内部使用）"
         required: false
@@ -176,7 +168,7 @@ jobs:
       enable_susfs: ${{ !inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
-      noroot: ${{ inputs.noroot || false }}
+      noroot: ${{ inputs.kernelsu_variant == 'NoRoot' }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过

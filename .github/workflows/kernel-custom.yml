@@ -37,6 +37,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - ReSukiSU
+          - NoRoot
         default: ReSukiSU
 
       # ==================== 可选配置 ====================
@@ -83,12 +84,6 @@ on:
         required: false
         type: boolean
         default: false
-      noroot:
-        description: "无 Root 模式 (不集成 KernelSU)"
-        required: false
-        type: boolean
-        default: false
-
       # ==================== 功能开关 ====================
       use_zram:
         description: "启用 ZRAM 增强算法"
@@ -213,7 +208,7 @@ jobs:
       enable_susfs: ${{ !inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
-      noroot: ${{ inputs.noroot || false }}
+      noroot: ${{ inputs.kernelsu_variant == 'NoRoot' }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   get-ksu-manager:
