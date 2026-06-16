@@ -631,9 +631,35 @@ jobs:
                 sed -i '/#include <linux\/dma-buf.h>/a #include <linux\/susfs_def.h>' ./fs/proc/base.c
                 sed -i '/#include <linux\/dma-buf.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)' ./fs/proc/base.c
               fi
+              # 修复 proc/base.c 头部 hunk 失败: SUSFS 符号存在但缺少必要的头文件声明
+              if grep -q 'susfs_is_current_proc_umounted\|SUSFS_IS_INODE_SUS_MAP\|SUSFS_IS_INODE_OPEN_REDIRECT' ./fs/proc/base.c && ! grep -qF 'susfs_is_current_ksu_domain' ./fs/proc/base.c; then
+                echo "检测到 proc/base.c 缺少 SUSFS 函数声明，注入..."
+                if grep -qF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+                  sed -i '/#include <linux\/dma-buf.h>/a \n#ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\nextern bool susfs_is_current_ksu_domain(void);\n#endif' ./fs/proc/base.c
+                elif grep -qF '#include <linux/cpufreq_times.h>' ./fs/proc/base.c; then
+                  sed -i '/#include <linux\/cpufreq_times.h>/a \n#ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\nextern bool susfs_is_current_ksu_domain(void);\n#endif' ./fs/proc/base.c
+                fi
+              fi
               if [[ "$CURRENT_SUB" -le 58 ]]; then
-                cp $KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a15-6.6/task_mmu.c.patch ./
-                patch -p1 < task_mmu.c.patch || true
+                TASK_MMU_PATCH="$KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a15-6.6/task_mmu.c.patch"
+                if [ -f "$TASK_MMU_PATCH" ]; then
+                  cp "$TASK_MMU_PATCH" ./
+                  patch -p1 < task_mmu.c.patch || true
+                else
+                  echo "task_mmu.c.patch 未找到，使用 sed 回退修复..."
+                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c || true
+                fi
+              fi
+              # 修复 mm/memory.c 头部 hunk 失败: SUSFS 符号存在但缺少 susfs_def.h
+              if grep -q 'susfs_is_current_ksu_domain\|SUSFS_IS_INODE_SUS_MAP' ./mm/memory.c && ! grep -qF 'susfs_def.h' ./mm/memory.c; then
+                echo "检测到 mm/memory.c 缺少 susfs_def.h，注入..."
+                if grep -qF '#include <linux/dma-buf.h>' ./mm/memory.c; then
+                  sed -i '/#include <linux\/dma-buf.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
+                elif grep -qF '#include <linux/ksm.h>' ./mm/memory.c; then
+                  sed -i '/#include <linux\/ksm.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
+                elif grep -qF '#include <linux/mm_inline.h>' ./mm/memory.c; then
+                  sed -i '/#include <linux\/mm_inline.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
+                fi
               fi
             fi
 
@@ -756,6 +782,7 @@ jobs:
           enable_config CONFIG_SYSVIPC
           enable_config CONFIG_POSIX_MQUEUE
           enable_config CONFIG_IPC_NS
+          enable_config CONFIG_USER_NS
           enable_config CONFIG_PID_NS
           enable_config CONFIG_DEVTMPFS
 
