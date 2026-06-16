@@ -60,6 +60,11 @@ on:
         required: false
         type: boolean
         default: false
+      noroot:
+        description: "无 Root 模式 (不集成 KernelSU)"
+        required: false
+        type: boolean
+        default: false
       use_zram:
         description: "启用 ZRAM 增强算法"
         required: true
@@ -117,6 +122,10 @@ on:
         type: string
         default: "上传全部"
       droidspaces_ntsync:
+        required: false
+        type: boolean
+        default: false
+      noroot:
         required: false
         type: boolean
         default: false
@@ -197,6 +206,7 @@ jobs:
       enable_susfs: ${{ !inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      noroot: ${{ inputs.noroot || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过

@@ -78,6 +78,10 @@ on:
         description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
         type: boolean
         default: false
+      noroot:
+        description: "无 Root 模式 (不集成 KernelSU)"
+        type: boolean
+        default: false
 
       # ==================== 功能开关 ====================
       use_zram:
@@ -149,6 +153,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      noroot: ${{ inputs.noroot || false }}
       called_from_main: true
 
   # ==================== Android 13 - 5.15 构建 ====================
@@ -168,6 +173,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      noroot: ${{ inputs.noroot || false }}
       called_from_main: true
 
   # ==================== Android 14 - 6.1 构建 ====================
@@ -187,6 +193,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      noroot: ${{ inputs.noroot || false }}
       called_from_main: true
 
   # ==================== Android 15 - 6.6 构建 ====================
@@ -206,6 +213,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      noroot: ${{ inputs.noroot || false }}
       called_from_main: true
 
   # ==================== Android 16 - 6.12 构建 ====================
@@ -225,6 +233,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      noroot: ${{ inputs.noroot || false }}
       called_from_main: true
 
   # ==================== 收集补丁冲突文件 ====================
