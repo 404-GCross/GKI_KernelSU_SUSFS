@@ -875,16 +875,27 @@ jobs:
               exit 0
               ;;
           esac
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::Droidspaces SYSVIPC kABI 补丁不存在: $PATCH_FILE"
+            echo "请确认 Droidspaces 槽位 '$SLOT' 在此内核版本下受支持"
+            exit 1
+          fi
           if ! patch -p1 --forward < "$PATCH_FILE"; then
-            echo "::warning::SYSVIPC kABI 补丁应用失败，可能已应用或上下文不匹配"
+            echo "::error::SYSVIPC kABI 补丁应用失败，内核版本 $KERNEL_VER (sub_level=${{ inputs.sub_level }}) 可能尚未适配"
+            exit 1
           fi
 
           # 5.10 及以下还需要 POSIX_MQUEUE 的 kABI 修复
           if [ "$KERNEL_VER" = "5.10" ]; then
             echo "应用 Droidspaces POSIX_MQUEUE kABI 修复补丁 (5.10)..."
             POSIX_PATCH="$DROIDSPACES_PATCHES/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch"
+            if [ ! -f "$POSIX_PATCH" ]; then
+              echo "::error::Droidspaces POSIX_MQUEUE kABI 补丁不存在: $POSIX_PATCH"
+              exit 1
+            fi
             if ! patch -p1 --forward < "$POSIX_PATCH"; then
-              echo "::warning::POSIX_MQUEUE kABI 补丁应用失败，可能已应用或上下文不匹配"
+              echo "::error::POSIX_MQUEUE kABI 补丁应用失败，5.10 内核版本可能尚未适配"
+              exit 1
             fi
           fi
 
