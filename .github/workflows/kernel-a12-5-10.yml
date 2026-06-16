@@ -224,7 +224,7 @@ jobs:
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过
   get-ksu-manager:
-    if: ${{ !inputs.called_from_main }}
+    if: ${{ !inputs.called_from_main && inputs.kernelsu_variant != 'NoRoot' }}
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:

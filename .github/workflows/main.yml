@@ -127,6 +127,7 @@ jobs:
   # ==================== 获取管理器 ====================
   # 下载最新的 KernelSU 管理器 APK 和 SUSFS 模块
   get-manager:
+    if: ${{ inputs.kernelsu_variant != 'NoRoot' }}
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:
